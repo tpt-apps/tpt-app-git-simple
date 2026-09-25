@@ -1,0 +1,19 @@
+[package]
+name = "tpt-git-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Git adapter for TPT Git Simple: status/log/diff out, plain-language commits/conflict guidance/safe undo in — over an abstract filesystem so the same code runs native (host tests, desktop) and on wasm32 (browser). Pure Rust, no UI deps."
+publish = false
+
+[features]
+default = []
+# Pro edition capabilities: writing objects (save/commit), ref/reflog
+# updates with backup-ref safe undo, and merge/conflict guidance helpers.
+# Compiled out of the free WASM build to keep the payload small.
+pro = []
+
+[dependencies]
+# Pure-Rust, wasm32-safe zlib inflate/deflate for git loose + pack objects.
+miniz_oxide = "0.8"
+# Tiny pure-Rust SHA-1 for object-ID computation when writing objects.
+sha1_smol = "1"
