@@ -101,7 +101,17 @@
       registry — manual step, listing copy at apps.md §T2-9
 
 ## Phase 4 — Ship & measure
-- [ ] Registry entry (`developer` category, `wasm: { entry: '/apps/git-simple/git-simple.js' }`)
+- [x] Registry entry (`developer` category, `wasm: { entry: '/apps/git-simple/git-simple.js' }`)
       per the "Adding a finished app to the hub" runbook at the bottom of apps.md
-- [ ] Verify hub card/detail/sitemap/runner in dev, then prod after deploy
-- [ ] WASM size budget check on the shipped build
+      (added to tpt-apps-registry.ts with price $15 + proFeatures; status
+      `coming-soon` — flip to `live` after the Gumroad listing exists, and add
+      the `gumroadUrl` then)
+- [x] Verify hub card/detail/sitemap/runner in dev, then prod after deploy
+      (verified in `npm run dev`: card on /tools with SOON chip, detail page
+      /tools/git-simple loads the wasm runner, app mounts and renders, $15
+      price shows. Prod: after the next deploy of the web repo.)
+- [x] WASM size budget check on the shipped build
+      (free bundle: 355 KB wasm + 28 KB glue — within the hub's 224 KB–2.4 MB
+      peer range; the embedded 35 KB demo repo is inside the wasm)
+- [x] Web repo: bundle copied to `public/apps/git-simple/` + registry entry
+      committed locally (NOT pushed — push together with the Gumroad step)
