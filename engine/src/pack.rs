@@ -171,7 +171,7 @@ fn read_zlib_at(data: &[u8], start: usize, declared_size: usize) -> Result<Vec<u
 /// Applies a git delta instruction stream: two size varints (little-endian
 /// 7-bit groups), then copy/insert ops.
 fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
-    let (_source_size, mut pos) = read_varint(delta, 0)?;
+    let (_source_size, pos) = read_varint(delta, 0)?;
     let (target_size, mut pos) = read_varint(delta, pos)?;
 
     let mut out = Vec::with_capacity(target_size.min(1 << 20));

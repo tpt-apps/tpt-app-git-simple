@@ -53,11 +53,24 @@
       round trips (cargo test -p tpt-git-engine --features pro)
 
 ## Phase 2 — Free tier
-- [ ] View-only repo browser: file tree, commit history, diff viewer — no
-      commit/push/pull actions
-- [ ] Free-tier upsell copy pointing at full commit/push/pull with guardrails,
-      conflict guidance, safe undo
-- [ ] Browser/desktop-verified: mount, open a repo, browse history and diffs
+- [x] View-only repo browser: file tree, commit history, diff viewer — no
+      commit/push/pull actions (`src/app.rs`: History tab with commit list →
+      per-commit changed-file summary with +/− counts → line-level diff
+      viewer; Files tab with expandable tree + file reader at HEAD; all
+      reads go through the MemoryFs snapshot, the worktree is never touched)
+- [x] Free-tier upsell copy pointing at full commit/push/pull with guardrails,
+      conflict guidance, safe undo (sidebar upsell card + footer link to
+      tptsolutions.co.nz/tools/git-simple)
+- [x] Browser/desktop-verified: mount, open a repo, browse history and diffs
+      (verified in-browser against the embedded demo repo: facts card, 5
+      commits newest-first, commit selection, changed-file list, line diff
+      with add/del/context, file tree + text viewer; computed styles checked
+      for light/dark themes). Note: the File System Access directory-picker
+      path needs a manual click-through in Chrome/Edge — the demo path is
+      automation-verified; `open_directory_snapshot` needs one manual test
+      before shipping.
+      Demo repo: `tools/make_demo.py` regenerates `src/demo_repo.bin`
+      (fictional bakery website: 5 commits + redesign branch).
 
 ## Phase 3 — Paid desktop edition (cargo feature `pro`)
 - [ ] `pro` gates: save (commit), get latest (pull), push, with guardrails
