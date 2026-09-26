@@ -33,6 +33,10 @@ pub struct ConflictFile {
     /// hunks then carry the surviving side only.
     pub delete_modify: bool,
     pub hunks: Vec<ConflictHunk>,
+    /// The full file content with conflict markers, ready to write into the
+    /// worktree (empty for delete/modify conflicts, where the file on disk
+    /// already holds the surviving side's edits).
+    pub marked: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -105,6 +109,7 @@ pub fn merge_trees<F: GitFs>(
                         theirs: Vec::new(),
                         base: None,
                     }],
+                    marked: Vec::new(),
                 })
             }
             (Some(_), None, Some(_)) => {
@@ -118,6 +123,7 @@ pub fn merge_trees<F: GitFs>(
                         theirs: file_lines(repo, t)?,
                         base: None,
                     }],
+                    marked: Vec::new(),
                 })
             }
             _ => {
@@ -135,12 +141,13 @@ pub fn merge_trees<F: GitFs>(
                             MergeOutcome::Merged(bytes)
                         }
                     }
-                    Either::Conflict(hunks) => {
+                    Either::Conflict(hunks, marked) => {
                         conflicted = true;
                         MergeOutcome::Conflict(ConflictFile {
                             path: path.clone(),
                             delete_modify: false,
                             hunks,
+                            marked,
                         })
                     }
                 }
@@ -198,7 +205,7 @@ fn lines(bytes: &[u8]) -> Vec<String> {
 
 pub enum Either {
     Merged(Vec<u8>),
-    Conflict(Vec<ConflictHunk>),
+    Conflict(Vec<ConflictHunk>, Vec<u8>),
 }
 
 /// diff3-style merge: each side's changes against the base become regions;
@@ -321,7 +328,7 @@ pub fn merge_blobs(base: &[u8], ours: &[u8], theirs: &[u8], path: &str) -> Resul
     if hunks.is_empty() {
         Ok(Either::Merged(joined))
     } else {
-        Ok(Either::Conflict(hunks))
+        Ok(Either::Conflict(hunks, joined))
     }
 }
 
@@ -343,7 +350,7 @@ mod tests {
         let theirs = b"a\nb\nc\nd\nE\nf\n";
         match merge_blobs(base, ours, theirs, "x.txt").unwrap() {
             Either::Merged(bytes) => assert_eq!(bytes, b"a\nB\nc\nd\nE\nf\n".to_vec()),
-            Either::Conflict(_) => panic!("expected a clean merge"),
+            Either::Conflict(..) => panic!("expected a clean merge"),
         }
     }
 
@@ -354,7 +361,7 @@ mod tests {
         let theirs = b"a\nX\nc\n";
         match merge_blobs(base, ours, theirs, "x.txt").unwrap() {
             Either::Merged(bytes) => assert_eq!(bytes, b"a\nX\nc\n".to_vec()),
-            Either::Conflict(_) => panic!("expected a clean merge"),
+            Either::Conflict(..) => panic!("expected a clean merge"),
         }
     }
 
@@ -364,8 +371,9 @@ mod tests {
         let ours = b"a\nMY b\nc\n";
         let theirs = b"a\nTHEIR b\nc\n";
         match merge_blobs(base, ours, theirs, "x.txt").unwrap() {
-            Either::Conflict(hunks) => {
+            Either::Conflict(hunks, marked) => {
                 assert_eq!(hunks.len(), 1);
+                assert!(marked.contains(&b'<'));
                 assert_eq!(hunks[0].ours, vec!["MY b".to_string()]);
                 assert_eq!(hunks[0].theirs, vec!["THEIR b".to_string()]);
                 assert_eq!(hunks[0].base.as_deref(), Some(&["b".to_string()][..]));
@@ -381,7 +389,7 @@ mod tests {
         let theirs = b"a\ntheirs\n";
         assert!(matches!(
             merge_blobs(base, ours, theirs, "x.txt").unwrap(),
-            Either::Conflict(_)
+            Either::Conflict(..)
         ));
     }
 }

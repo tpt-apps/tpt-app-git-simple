@@ -73,13 +73,30 @@
       (fictional bakery website: 5 commits + redesign branch).
 
 ## Phase 3 — Paid desktop edition (cargo feature `pro`)
-- [ ] `pro` gates: save (commit), get latest (pull), push, with guardrails
+- [x] `pro` gates: save (commit), get latest (pull), push, with guardrails
       (confirm before anything destructive), plain-English merge-conflict
       guidance, safe undo (reflog-backed)
-- [ ] Pro UI: "Save"/"Get latest" plain-language actions, conflict resolution
-      wizard, undo button
-- [ ] Desktop shell via `tpt-appfront-webview`; Windows exe build + smoke test
+      Architecture: the desktop exe hosts the same wasm UI and serves as the
+      native side of an IPC bridge — `git.*` actions (`desktop/src/git_host.rs`)
+      run the engine over `StdFs` plus the git CLI for fetch/push, with
+      results delivered through the value-reply IPC added to
+      tpt-appfront-webview (`AppBuilder::run_with_value_handler`, additive;
+      existing `run` unchanged). Saves read staged files fresh from disk;
+      discards always write a backup ref first; pull merges with the engine
+      and, on conflict, writes markers + plain-English guidance for the
+      wizard. Native flows are covered by `desktop/src/git_host.rs` tests
+      against real git repos (save/undo round trip, discard→backup→restore,
+      clean pull, pull-conflict markers, up-to-date detection).
+- [x] Pro UI: "Save your changes" (staged checklist + message),
+      "Get the latest" / "Send my versions" buttons, conflict wizard (per-file
+      sides shown, fix-in-editor flow, save records the merge parent),
+      undo/discard confirmations, identity setup persisted in localStorage
+      (`src/app.rs` pro sections + `src/pro.rs` bridge client)
+- [x] Desktop shell via `tpt-appfront-webview`; Windows exe build + smoke test
       on a real git repo including a deliberate conflict scenario
+      (`./build.ps1 -Pro`: trunk `--features pro` + `tpt-git-simple-pro.exe`,
+      dist embedded; exe launches and stays up; conflict scenario verified at
+      the git_host level — GUI click-through still worth one manual pass)
 - [ ] Gumroad product from apps.md listing copy ($15), exe upload, URL into
       registry — manual step, listing copy at apps.md §T2-9
 

@@ -39,6 +39,51 @@ enum Msg {
     OpenFile(String),
     /// Open a tptsolutions.co.nz page in a new tab.
     VisitSite(String),
+    // ----- pro (desktop) -----
+    /// Open a repo via the native folder picker + snapshot IPC.
+    #[cfg(feature = "pro")]
+    OpenRepoDesktop,
+    /// Toggle a file's staged state (RefCell-only: no re-render, so typing
+    /// and ticking never lose input focus).
+    #[cfg(feature = "pro")]
+    ToggleStage(String, bool),
+    /// Stage everything / nothing (rerenders — cheap and unambiguous).
+    #[cfg(feature = "pro")]
+    StageAll(bool),
+    /// Save the staged files with the typed message (reads RefCells).
+    #[cfg(feature = "pro")]
+    SaveNow,
+    /// Move the branch back one save (soft; files keep their content).
+    #[cfg(feature = "pro")]
+    UndoLastSave,
+    /// Ask before discarding the selected files' changes.
+    #[cfg(feature = "pro")]
+    AskDiscard,
+    /// The user confirmed (or cancelled) the destructive action.
+    #[cfg(feature = "pro")]
+    ConfirmDiscard,
+    #[cfg(feature = "pro")]
+    CancelConfirm,
+    /// Get the latest version (fetch + merge via the git CLI).
+    #[cfg(feature = "pro")]
+    GetLatest,
+    /// Send saved versions to the remote.
+    #[cfg(feature = "pro")]
+    PushNow,
+    /// Conflict resolution finished in the user's editor — reload and go to
+    /// Changes so the merge can be saved.
+    #[cfg(feature = "pro")]
+    ConflictsResolved,
+    /// Save the identity form (reads RefCells).
+    #[cfg(feature = "pro")]
+    SaveIdentity,
+    /// Update a typed field (RefCell-only, no re-render).
+    #[cfg(feature = "pro")]
+    TypeMessage,
+    #[cfg(feature = "pro")]
+    TypeName,
+    #[cfg(feature = "pro")]
+    TypeEmail,
 }
 
 #[derive(Clone)]
@@ -59,6 +104,10 @@ struct Loaded {
     /// Newest first.
     log: Vec<LogEntry>,
     repo: Rc<RefCell<Repo<MemoryFs>>>,
+    /// Real filesystem path (desktop only; the browser edition never knows
+    /// where the folder lives).
+    #[cfg(feature = "pro")]
+    path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +120,8 @@ struct FileSummary {
 
 const TAB_HISTORY: &str = "history";
 const TAB_FILES: &str = "files";
+#[cfg(feature = "pro")]
+const TAB_CHANGES: &str = "changes";
 const SITE_URL: &str = "https://tptsolutions.co.nz/tools/git-simple";
 
 const BASE_CSS: &str = r#"
@@ -145,7 +196,109 @@ const BASE_CSS: &str = r#"
 .gsr-diff .hunk{background:var(--gsr-panel);color:var(--gsr-accent);font-weight:700;padding:4px 8px}
 .gsr-text{display:block;padding:10px 12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8rem;white-space:pre-wrap;word-break:break-all;margin:0;max-height:420px;overflow:auto}
 .gsr-foot{margin-top:26px;padding-top:14px;border-top:1px solid var(--gsr-border);color:var(--gsr-muted);font-size:.8rem;display:flex;gap:4px 16px;flex-wrap:wrap;align-items:center}
+.gsr-status{display:flex;flex-direction:column;gap:2px}
+.gsr-status-row{display:flex;gap:10px;align-items:baseline;padding:6px 10px;border-radius:8px;font-size:.86rem}
+.gsr-status-row:hover{background:var(--gsr-panel)}
+.gsr-status-kind{flex:0 0 auto;min-width:64px;font-size:.72rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--gsr-muted)}
+.gsr-check{display:inline-flex;align-items:center;gap:8px;font-size:.88rem;padding:2px 0}
+.gsr-check input{accent-color:var(--gsr-accent);width:15px;height:15px}
+.gsr-input{flex:1;padding:8px 10px;border:1px solid var(--gsr-border);border-radius:8px;background:var(--gsr-bg);color:var(--gsr-fg);font:inherit}
+.gsr-input:focus{outline:none;border-color:var(--gsr-accent);box-shadow:0 0 0 3px var(--gsr-accent-soft)}
+.gsr-field{display:flex;flex-direction:column;gap:5px;margin:6px 0}
+.gsr-field label{font-size:.72rem;color:var(--gsr-muted);font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.gsr-notice{margin:0 0 4px;padding:10px 12px;background:var(--gsr-accent-soft);border-radius:10px;font-size:.88rem}
+.gsr-confirm{border:1px solid var(--gsr-del);background:var(--gsr-del-bg);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.gsr-confirm h3{color:var(--gsr-del)}
+.gsr-confirm-row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.gsr-danger{background:var(--gsr-del);border-color:transparent;color:#fff}
+.gsr-danger:hover{color:#fff;filter:brightness(1.1)}
+.gsr-conflict{border:1px solid var(--gsr-del);border-radius:12px;padding:12px 14px;margin:8px 0;background:var(--gsr-surface)}
+.gsr-conflict h4{margin:0 0 4px;font-size:.92rem}
+.gsr-conflict-sides{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:8px 0}
+@media(max-width:700px){.gsr-conflict-sides{grid-template-columns:1fr}}
+.gsr-side{border-radius:8px;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem;white-space:pre-wrap;word-break:break-all}
+.gsr-side.ours{background:var(--gsr-del-bg)}
+.gsr-side.theirs{background:var(--gsr-add-bg)}
+.gsr-side-label{font-family:inherit;font-weight:800;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;color:var(--gsr-muted)}
 "#;
+
+/// Everything the Pro (desktop) UI needs across renders. Signals re-render;
+/// the RefCells deliberately don't — typing and ticking never lose focus.
+#[cfg(feature = "pro")]
+#[derive(Clone)]
+struct ProCtx {
+    /// Real filesystem path of the open repository.
+    repo_path: Signal<Option<String>>,
+    /// Native worktree-vs-HEAD status for the Changes tab.
+    status_rows: Signal<Option<Vec<crate::pro::StatusRow>>>,
+    /// Active merge-conflict state + the fetched tip to record as the merge
+    /// parent when the resolution is saved.
+    conflicts: Signal<Option<(Vec<crate::pro::ConflictReport>, String)>>,
+    busy: Signal<Option<String>>,
+    notice: Signal<Option<String>>,
+    confirm: Signal<Option<ConfirmKind>>,
+    message: Rc<RefCell<String>>,
+    staged: Rc<RefCell<BTreeSet<String>>>,
+    name: Rc<RefCell<String>>,
+    email: Rc<RefCell<String>>,
+}
+
+#[cfg(feature = "pro")]
+#[derive(Debug, Clone)]
+enum ConfirmKind {
+    Discard(Vec<String>),
+    Undo,
+}
+
+#[cfg(feature = "pro")]
+impl ProCtx {
+    fn new() -> Self {
+        let (name, email) = crate::pro::load_identity();
+        ProCtx {
+            repo_path: Signal::new(None),
+            status_rows: Signal::new(None),
+            conflicts: Signal::new(None),
+            busy: Signal::new(None),
+            notice: Signal::new(None),
+            confirm: Signal::new(None),
+            message: Rc::new(RefCell::new(String::new())),
+            staged: Rc::new(RefCell::new(BTreeSet::new())),
+            name: Rc::new(RefCell::new(name)),
+            email: Rc::new(RefCell::new(email)),
+        }
+    }
+
+    /// Re-snapshots the desktop repository after any mutation so History /
+    /// Files reflect the new state. Preserves the path + tab.
+    fn refresh(&self, load: &Signal<Load>, tab: &Signal<&'static str>) {
+        let Some(path) = self.repo_path.get() else { return };
+        let pro = self.clone();
+        let load = load.clone();
+        let tab = tab.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::pro::call("git.snapshot", &serde_json::json!({ "path": path })).await {
+                Ok(value) => {
+                    match serde_json::from_value::<crate::pro::Snapshot>(value) {
+                        Ok(snapshot) => {
+                            load.set(load_snapshot_desktop(snapshot, Some(path)));
+                            pro.busy.set(None);
+                        }
+                        Err(e) => {
+                            pro.busy.set(None);
+                            load.set(Load::Failed(format!("Couldn't re-read the repository: {e}")));
+                        }
+                    }
+                }
+                Err(e) => {
+                    pro.busy.set(None);
+                    load.set(Load::Failed(e));
+                }
+            }
+            // Keep the working tab stable across refreshes.
+            tab.set(tab.get());
+        });
+    }
+}
 
 /// Mounts the whole free-edition app into `container` (the hub's container
 /// div, or the standalone `#tpt-appfront-root` marker).
@@ -173,6 +326,8 @@ pub fn mount_app(container: &web_sys::Element) -> Result<(), JsValue> {
     let selected_commit: Signal<Option<String>> = Signal::new(None);
     let selected_file: Signal<Option<String>> = Signal::new(None);
     let collapsed: Signal<BTreeSet<String>> = Signal::new(BTreeSet::new());
+    #[cfg(feature = "pro")]
+    let pro = ProCtx::new();
 
     let dispatch: Rc<dyn Fn(Msg)> = {
         let load = load.clone();
@@ -180,6 +335,8 @@ pub fn mount_app(container: &web_sys::Element) -> Result<(), JsValue> {
         let selected_commit = selected_commit.clone();
         let selected_file = selected_file.clone();
         let collapsed = collapsed.clone();
+        #[cfg(feature = "pro")]
+        let pro = pro.clone();
         Rc::new(move |msg| match msg {
             Msg::OpenRepo => {
                 let load = load.clone();
@@ -234,11 +391,327 @@ pub fn mount_app(container: &web_sys::Element) -> Result<(), JsValue> {
                 });
             }
             Msg::VisitSite(url) => visit_site(&url),
+            #[cfg(feature = "pro")]
+            Msg::OpenRepoDesktop => {
+                let pro = pro.clone();
+                let load = load.clone();
+                let tab = tab.clone();
+                load.set(Load::Loading);
+                wasm_bindgen_futures::spawn_local(async move {
+                    let picked = crate::pro::call(
+                        "dialog.open",
+                        &serde_json::json!({
+                            "title": "Choose a repository folder",
+                            "dir": true,
+                        }),
+                    )
+                    .await;
+                    let path = match picked {
+                        Ok(value) => value.get("path").and_then(|v| v.as_str()).map(String::from),
+                        Err(e) => {
+                            load.set(Load::Idle);
+                            pro.notice.set(Some(e));
+                            return;
+                        }
+                    };
+                    let Some(path) = path else {
+                        load.set(Load::Idle); // picker cancelled
+                        return;
+                    };
+                    pro.repo_path.set(Some(path.clone()));
+                    match crate::pro::call("git.snapshot", &serde_json::json!({ "path": path })).await {
+                        Ok(value) => match serde_json::from_value::<crate::pro::Snapshot>(value) {
+                            Ok(snapshot) => {
+                                pro.status_rows.set(None);
+                                pro.conflicts.set(None);
+                                pro.notice.set(None);
+                                load.set(load_snapshot_desktop(snapshot, Some(path)));
+                                tab.set(TAB_HISTORY);
+                            }
+                            Err(e) => load.set(Load::Failed(format!("Couldn't read the repository: {e}"))),
+                        },
+                        Err(e) => load.set(Load::Failed(e)),
+                    }
+                });
+            }
+            #[cfg(feature = "pro")]
+            Msg::ToggleStage(path, on) => {
+                let mut set = pro.staged.borrow_mut();
+                if on {
+                    set.insert(path);
+                } else {
+                    set.remove(&path);
+                }
+            }
+            #[cfg(feature = "pro")]
+            Msg::StageAll(on) => {
+                if on {
+                    if let Some(rows) = pro.status_rows.get() {
+                        *pro.staged.borrow_mut() = rows.iter().map(|r| r.path.clone()).collect();
+                    }
+                } else {
+                    pro.staged.borrow_mut().clear();
+                }
+                // Checkboxes reflect the new state: force a re-render.
+                let rows = pro.status_rows.get();
+                pro.status_rows.set(rows);
+            }
+            #[cfg(feature = "pro")]
+            Msg::TypeMessage => {}
+            #[cfg(feature = "pro")]
+            Msg::TypeName => {}
+            #[cfg(feature = "pro")]
+            Msg::TypeEmail => {}
+            #[cfg(feature = "pro")]
+            Msg::SaveIdentity => {
+                let name = pro.name.borrow().clone();
+                let email = pro.email.borrow().clone();
+                crate::pro::save_identity(&name, &email);
+                let rows = pro.status_rows.get();
+                pro.status_rows.set(rows); // re-render the Changes tab
+            }
+            #[cfg(feature = "pro")]
+            Msg::SaveNow => {
+                let message = pro.message.borrow().trim().to_string();
+                if message.is_empty() {
+                    pro.notice.set(Some("Write a short description of what changed first.".into()));
+                    return;
+                }
+                let staged: Vec<String> = pro.staged.borrow().iter().cloned().collect();
+                if staged.is_empty() {
+                    pro.notice.set(Some("Tick at least one file to save.".into()));
+                    return;
+                }
+                let (name, email) = crate::pro::load_identity();
+                if name.is_empty() || email.is_empty() {
+                    pro.notice.set(Some("Add your name and email in the sidebar first — git records who saved each change.".into()));
+                    return;
+                }
+                let deleted = pro
+                    .status_rows
+                    .get()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|r| r.kind == "deleted")
+                    .map(|r| r.path)
+                    .collect::<BTreeSet<String>>();
+                let files: Vec<serde_json::Value> = staged
+                    .iter()
+                    .map(|path| {
+                        if deleted.contains(path) {
+                            serde_json::json!({ "path": path, "content": serde_json::Value::Null })
+                        } else {
+                            // No content key: the native side reads the file
+                            // fresh from disk (the snapshot may be stale).
+                            serde_json::json!({ "path": path })
+                        }
+                    })
+                    .collect();
+                let merge_parent = pro.conflicts.get().map(|(_, parent)| parent);
+                let mut params = serde_json::json!({
+                    "path": pro.repo_path.get(),
+                    "message": message,
+                    "name": name,
+                    "email": email,
+                    "files": files,
+                });
+                if let Some(parent) = &merge_parent {
+                    params["mergeParent"] = serde_json::json!(parent);
+                }
+                let pro = pro.clone();
+                let load = load.clone();
+                let tab = tab.clone();
+                pro.busy.set(Some("Saving your changes…".into()));
+                wasm_bindgen_futures::spawn_local(async move {
+                    match crate::pro::call("git.save", &params).await {
+                        Ok(value) => {
+                            let oid = value.get("oid").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            pro.conflicts.set(None);
+                            pro.message.borrow_mut().clear();
+                            pro.staged.borrow_mut().clear();
+                            pro.status_rows.set(None);
+                            pro.notice.set(Some(format!(
+                                "Saved. Version {} is now the latest.",
+                                &oid[..oid.len().min(7)]
+                            )));
+                            pro.refresh(&load, &tab);
+                        }
+                        Err(e) => {
+                            pro.busy.set(None);
+                            pro.notice.set(Some(e));
+                        }
+                    }
+                });
+            }
+            #[cfg(feature = "pro")]
+            Msg::UndoLastSave => {
+                pro.confirm.set(Some(ConfirmKind::Undo));
+            }
+            #[cfg(feature = "pro")]
+            Msg::AskDiscard => {
+                let selected: Vec<String> = pro.staged.borrow().iter().cloned().collect();
+                if selected.is_empty() {
+                    pro.notice.set(Some("Tick the files whose changes you want to discard.".into()));
+                    return;
+                }
+                pro.confirm.set(Some(ConfirmKind::Discard(selected)));
+            }
+            #[cfg(feature = "pro")]
+            Msg::CancelConfirm => {
+                pro.confirm.set(None);
+            }
+            #[cfg(feature = "pro")]
+            Msg::ConfirmDiscard => {
+                let confirm = pro.confirm.get();
+                let pro = pro.clone();
+                let load = load.clone();
+                let tab = tab.clone();
+                pro.confirm.set(None);
+                pro.busy.set(Some("Working…".into()));
+                wasm_bindgen_futures::spawn_local(async move {
+                    let (action, mut params) = match confirm {
+                        Some(ConfirmKind::Undo) => (
+                            "git.undo",
+                            serde_json::json!({
+                                "name": crate::pro::load_identity().0,
+                                "email": crate::pro::load_identity().1,
+                            }),
+                        ),
+                        Some(ConfirmKind::Discard(files)) => (
+                            "git.discard",
+                            serde_json::json!({
+                                "files": files,
+                                "name": crate::pro::load_identity().0,
+                                "email": crate::pro::load_identity().1,
+                            }),
+                        ),
+                        None => return,
+                    };
+                    if let Some(path) = pro.repo_path.get() {
+                        params["path"] = serde_json::json!(path);
+                    }
+                    match crate::pro::call(action, &params).await {
+                        Ok(value) => {
+                            let backup = value.get("backupRef").and_then(|v| v.as_str()).map(String::from);
+                            pro.status_rows.set(None);
+                            pro.staged.borrow_mut().clear();
+                            pro.notice.set(Some(match backup {
+                                Some(r) => format!(
+                                    "Done. The previous state is kept as a backup ({r}) until it rotates out."
+                                ),
+                                None => "Done.".to_string(),
+                            }));
+                            pro.refresh(&load, &tab);
+                        }
+                        Err(e) => {
+                            pro.busy.set(None);
+                            pro.notice.set(Some(e));
+                        }
+                    }
+                });
+            }
+            #[cfg(feature = "pro")]
+            Msg::GetLatest => {
+                let (name, email) = crate::pro::load_identity();
+                if name.is_empty() || email.is_empty() {
+                    pro.notice.set(Some("Add your name and email in the sidebar first.".into()));
+                    return;
+                }
+                let params = serde_json::json!({ "name": name, "email": email });
+                let pro = pro.clone();
+                let load = load.clone();
+                let tab = tab.clone();
+                pro.busy.set(Some("Getting the latest version…".into()));
+                wasm_bindgen_futures::spawn_local(async move {
+                    match with_path(&pro, "git.pull", params).await {
+                        Ok(value) => {
+                            let status = value.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                            match status {
+                                "up-to-date" => {
+                                    pro.busy.set(None);
+                                    pro.notice.set(Some("You already have the latest version.".into()));
+                                }
+                                "merged" => {
+                                    pro.status_rows.set(None);
+                                    pro.notice.set(Some("Got the latest version and combined it with yours.".into()));
+                                    pro.refresh(&load, &tab);
+                                }
+                                "conflicts" => {
+                                    let reports = value
+                                        .get("conflicts")
+                                        .cloned()
+                                        .unwrap_or_else(|| serde_json::Value::Array(vec![]));
+                                    let reports: Vec<crate::pro::ConflictReport> =
+                                        serde_json::from_value(reports).unwrap_or_default();
+                                    let parent = value
+                                        .get("mergeParent")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or_default()
+                                        .to_string();
+                                    pro.conflicts.set(Some((reports, parent)));
+                                    pro.busy.set(None);
+                                    pro.notice.set(Some(
+                                        "Both sides changed the same parts — see the steps below to finish."
+                                            .into(),
+                                    ));
+                                    // Markers are on disk now; reload and show Changes.
+                                    pro.refresh(&load, &tab);
+                                    tab.set(TAB_CHANGES);
+                                }
+                                other => {
+                                    pro.busy.set(None);
+                                    pro.notice.set(Some(format!("Unexpected result: {other}")));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            pro.busy.set(None);
+                            pro.notice.set(Some(e));
+                        }
+                    }
+                });
+            }
+            #[cfg(feature = "pro")]
+            Msg::PushNow => {
+                let pro = pro.clone();
+                pro.busy.set(Some("Sending your saved versions…".into()));
+                wasm_bindgen_futures::spawn_local(async move {
+                    match with_path(&pro, "git.push", serde_json::json!({})).await {
+                        Ok(_) => {
+                            pro.busy.set(None);
+                            pro.notice.set(Some("Sent. Anyone else working on this repository can get your versions now.".into()));
+                        }
+                        Err(e) => {
+                            pro.busy.set(None);
+                            pro.notice.set(Some(e));
+                        }
+                    }
+                });
+            }
+            #[cfg(feature = "pro")]
+            Msg::ConflictsResolved => {
+                // Reload from disk (the user edited the files externally),
+                // then the Changes tab shows the marked files ready to save.
+                let pro = pro.clone();
+                let load = load.clone();
+                let tab = tab.clone();
+                pro.status_rows.set(None);
+                pro.busy.set(Some("Reloading…".into()));
+                wasm_bindgen_futures::spawn_local(async move {
+                    pro.refresh(&load, &tab);
+                    tab.set(TAB_CHANGES);
+                });
+            }
         })
     };
 
     // The static shell, mounted once.
-    let ui: UITree<Msg> = shell_tree();
+    let ui: UITree<Msg> = shell_tree(
+        #[cfg(feature = "pro")]
+        Some(&pro),
+        #[cfg(not(feature = "pro"))]
+        None,
+    );
     let mut shell = tpt_appfront_dom::mount(container, &ui, dispatch.clone())?;
 
     // The dynamic main column lives inside the shell's grid; find it by
@@ -263,6 +736,8 @@ pub fn mount_app(container: &web_sys::Element) -> Result<(), JsValue> {
         let selected_commit = selected_commit.clone();
         let selected_file = selected_file.clone();
         let collapsed = collapsed.clone();
+        #[cfg(feature = "pro")]
+        let pro = pro.clone();
         let handle = create_effect(move || {
             let tree = content_ui(
                 &load.get(),
@@ -270,6 +745,8 @@ pub fn mount_app(container: &web_sys::Element) -> Result<(), JsValue> {
                 selected_commit.get(),
                 selected_file.get(),
                 collapsed.get(),
+                #[cfg(feature = "pro")]
+                &pro,
             );
             // The content section changes *shape* between states (idle card
             // vs facts + tabs + lists), which in-place reconciliation isn't
@@ -327,7 +804,101 @@ fn load_snapshot(snapshot: Snapshot) -> Load {
         head: head.commit,
         log,
         repo: Rc::new(RefCell::new(repo)),
+        #[cfg(feature = "pro")]
+        path: None,
     }))
+}
+
+/// Builds app state from a native snapshot (desktop).
+#[cfg(feature = "pro")]
+fn load_snapshot_desktop(snapshot: crate::pro::Snapshot, path: Option<String>) -> Load {
+    let mut fs = MemoryFs::new();
+    for entry in &snapshot.files {
+        if let Ok(bytes) = use_base64(&entry.1) {
+            fs.add(&entry.0, bytes);
+        }
+    }
+    let total_bytes = fs.total_bytes() as usize;
+    let name = snapshot.name;
+    let skipped = snapshot.skipped;
+    let truncated = snapshot.truncated;
+    let mut repo = match Repo::open(fs) {
+        Ok(repo) => repo,
+        Err(e) => {
+            return Load::Failed(format!(
+                "\"{name}\" doesn't look like a git repository ({e})."
+            ))
+        }
+    };
+    let head = match repo.head() {
+        Ok(head) => head,
+        Err(e) => return Load::Failed(format!("Couldn't read the repository: {e}")),
+    };
+    let log = match head.commit {
+        Some(start) => repo.log_from(start, 500).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    Load::Ready(Rc::new(Loaded {
+        name,
+        total_bytes,
+        skipped,
+        truncated,
+        branch: head.branch,
+        head: head.commit,
+        log,
+        repo: Rc::new(RefCell::new(repo)),
+        path,
+    }))
+}
+
+/// Decodes the base64 file contents the desktop bridge ships.
+#[cfg(feature = "pro")]
+fn use_base64(encoded: &str) -> Result<Vec<u8>, String> {
+    // A tiny standard-base64 decoder (no external crate in the wasm build).
+    fn value_of(c: u8) -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a') as u32 + 26),
+            b'0'..=b'9' => Some((c - b'0') as u32 + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes = encoded.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    let mut acc: u32 = 0;
+    let mut bits = 0u32;
+    for &c in bytes {
+        if c == b'=' || c == b'\n' || c == b'\r' {
+            continue;
+        }
+        let Some(v) = value_of(c) else {
+            return Err(format!("bad base64 byte {c:#x}"));
+        };
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Ok(out)
+}
+
+/// Pro helper: runs a bridge command that needs the open repo's path.
+#[cfg(feature = "pro")]
+async fn with_path(
+    pro: &ProCtx,
+    action: &str,
+    mut params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let path = pro
+        .repo_path
+        .get()
+        .ok_or_else(|| "Open a repository first.".to_string())?;
+    params["path"] = serde_json::json!(path);
+    crate::pro::call(action, &params).await
 }
 
 fn is_user_abort(e: &JsValue) -> bool {
@@ -348,7 +919,11 @@ fn visit_site(url: &str) {
 }
 
 /// The mounted-once shell: header, sidebar, main-column placeholder.
-fn shell_tree() -> UITree<Msg> {
+#[cfg_attr(not(feature = "pro"), allow(unused_variables))]
+fn shell_tree(
+    #[cfg(feature = "pro")] pro: Option<&ProCtx>,
+    #[cfg(not(feature = "pro"))] _pro: Option<()>,
+) -> UITree<Msg> {
     UITree::container(|c| {
         c.container(|header| {
             header.text("GS").class("gsr-brand");
@@ -377,7 +952,7 @@ fn shell_tree() -> UITree<Msg> {
                 .class("gsr-actions");
 
                 #[cfg(feature = "pro")]
-                pro_badge_card(sidebar);
+                pro_actions_card(sidebar, pro.expect("pro ctx"));
                 #[cfg(not(feature = "pro"))]
                 upsell_card(sidebar);
             })
@@ -389,12 +964,14 @@ fn shell_tree() -> UITree<Msg> {
 }
 
 /// The dynamic main column: idle prompt, error, or the repo browser.
+#[cfg_attr(not(feature = "pro"), allow(unused_variables))]
 fn content_ui(
     load: &Load,
     tab: &'static str,
     selected_commit: Option<String>,
     selected_file: Option<String>,
     collapsed: BTreeSet<String>,
+    #[cfg(feature = "pro")] pro: &ProCtx,
 ) -> UITree<Msg> {
     UITree::container(|c| match load {
         Load::Idle => {
@@ -435,6 +1012,25 @@ fn content_ui(
             .class("gsr-card");
         }
         Load::Ready(data) => {
+            #[cfg(feature = "pro")]
+            {
+                if let Some(text) = pro.busy.get() {
+                    c.container(|card| {
+                        card.heading(3, &text);
+                    })
+                    .class("gsr-card gsr-empty");
+                    return;
+                }
+                if let Some(text) = pro.notice.get() {
+                    c.container(|card| {
+                        card.container(|p| {
+                            p.text(text);
+                        })
+                        .class("gsr-notice");
+                    })
+                    .class("gsr-card");
+                }
+            }
             repo_facts(c, data);
             c.container(|tabs| {
                 tabs.button("History")
@@ -443,13 +1039,37 @@ fn content_ui(
                 tabs.button("Files")
                     .class(if tab == TAB_FILES { "gsr-tab on" } else { "gsr-tab" })
                     .on_click(Msg::Tab(TAB_FILES));
+                #[cfg(feature = "pro")]
+                tabs.button("Changes")
+                    .class(if tab == TAB_CHANGES { "gsr-tab on" } else { "gsr-tab" })
+                    .on_click(Msg::Tab(TAB_CHANGES));
             })
             .class("gsr-tabs");
 
+            #[cfg(feature = "pro")]
+            {
+                // Confirm cards float above every tab (they're modal-ish).
+                if let Some(kind) = pro.confirm.get() {
+                    render_confirm(c, &kind);
+                }
+            }
+
+            #[cfg(feature = "pro")]
+            if tab == TAB_CHANGES {
+                render_changes(c, pro, data);
+                return;
+            }
             if tab == TAB_FILES {
                 render_files(c, data, selected_file, collapsed);
             } else {
-                render_history(c, data, selected_commit, selected_file);
+                render_history(
+                    c,
+                    data,
+                    selected_commit,
+                    selected_file,
+                    #[cfg(feature = "pro")]
+                    pro,
+                );
             }
         }
     })
@@ -496,11 +1116,13 @@ fn repo_facts(c: &mut ContainerBuilder<Msg>, data: &Rc<Loaded>) {
 
 /// History tab: commit list; a selected commit shows its changed files and,
 /// when a file is chosen, the line-level diff.
+#[cfg_attr(not(feature = "pro"), allow(unused_variables))]
 fn render_history(
     c: &mut ContainerBuilder<Msg>,
     data: &Rc<Loaded>,
     selected_commit: Option<String>,
     selected_file: Option<String>,
+    #[cfg(feature = "pro")] pro: &ProCtx,
 ) {
     if data.log.is_empty() {
         c.container(|card| {
@@ -513,7 +1135,19 @@ fn render_history(
     }
 
     c.container(|card| {
-        card.heading(3, "History");
+        card.container(|head| {
+            head.heading(3, "History");
+            #[cfg(feature = "pro")]
+            {
+                if let Some(_path) = data.path.as_deref() {
+                    let _ = _path;
+                    head.button("Undo last save")
+                        .class("gsr-close")
+                        .on_click(Msg::UndoLastSave);
+                }
+            }
+        })
+        .class("gsr-viewer-head");
         card.text(format!(
             "{} saved versions, newest first. Select one to see what changed.",
             data.log.len()
@@ -846,15 +1480,255 @@ fn file_diff(data: &Rc<Loaded>, commit: Oid, path: &str) -> Option<FileDiff> {
     Some(diff_blobs(&old.unwrap_or_default(), &new.unwrap_or_default()))
 }
 
-/// (pro) Sidebar chip marking the desktop build.
+/// (pro) Sidebar: identity + the plain-language write actions.
 #[cfg(feature = "pro")]
-fn pro_badge_card(c: &mut ContainerBuilder<Msg>) {
+fn pro_actions_card(c: &mut ContainerBuilder<Msg>, pro: &ProCtx) {
+    let (saved_name, saved_email) = crate::pro::load_identity();
+    let has_identity = !saved_name.is_empty() && !saved_email.is_empty();
+
     c.container(|card| {
-        card.heading(3, "Desktop edition");
-        card.text("All changes happen locally with guardrails: confirmations before anything destructive, a backup before any discard, and undo for every save.")
+        card.heading(3, "Get and send changes");
+        card.text("Works with whatever copy of the repository this branch is linked to (its \"origin\").")
             .class("gsr-hint");
+        card.container(|actions| {
+            actions.button("Get the latest").class("gsr-btn").on_click(Msg::GetLatest);
+            actions.button("Send my versions").class("gsr-btn").on_click(Msg::PushNow);
+        })
+        .class("gsr-actions");
+        if !crate::pro::is_desktop() {
+            card.text("This window isn't the desktop app, so saving and syncing are unavailable.")
+                .class("gsr-hint");
+        }
     })
     .class("gsr-upsell");
+
+    c.container(|card| {
+        card.heading(3, "Your details");
+        if has_identity {
+            card.container(|p| {
+                p.text(format!("{saved_name} <{saved_email}>"));
+            })
+            .class("gsr-hint");
+            card.button("Change").class("gsr-close").on_click(Msg::SaveIdentity);
+        } else {
+            card.text("Saved versions are recorded with your name, so everyone can see who changed what.")
+                .class("gsr-hint");
+            card.container(|field| {
+                field.container(|label| {
+                    label.text("Your name");
+                })
+                .class("gsr-field-label");
+                field.input(pro.name.borrow().clone())
+                    .class("gsr-input")
+                    .on_input(|_| Msg::TypeName);
+            })
+            .class("gsr-field");
+            card.container(|field| {
+                field.container(|label| {
+                    label.text("Your email");
+                })
+                .class("gsr-field-label");
+                field.input(pro.email.borrow().clone())
+                    .class("gsr-input")
+                    .on_input(|_| Msg::TypeEmail);
+            })
+            .class("gsr-field");
+            card.button("Save details").class("gsr-btn").on_click(Msg::SaveIdentity);
+        }
+    })
+    .class("gsr-card");
+}
+
+/// (pro) Confirmation card for destructive-feeling actions. Every one of
+/// these has a recovery path (reflog entry or backup ref) — the card says
+/// what it is.
+#[cfg(feature = "pro")]
+fn render_confirm(c: &mut ContainerBuilder<Msg>, kind: &ConfirmKind) {
+    c.container(|card| match kind {
+        ConfirmKind::Undo => {
+            card.heading(3, "Undo the last save?");
+            card.text("Your files stay exactly as they are — only the save record steps back one version. You can redo it.")
+                .class("gsr-hint");
+            card.container(|row| {
+                row.button("Yes, undo it")
+                    .class("gsr-btn gsr-danger")
+                    .on_click(Msg::ConfirmDiscard);
+                row.button("Keep it")
+                    .class("gsr-btn")
+                    .on_click(Msg::CancelConfirm);
+            })
+            .class("gsr-confirm-row");
+        }
+        ConfirmKind::Discard(files) => {
+            card.heading(3, "Undo these changes?");
+            card.text(format!(
+                "{} file{} go back to the last saved version. What they look like right now is kept as a backup first, so this can be undone.",
+                files.len(),
+                if files.len() == 1 { "" } else { "s" },
+            ))
+            .class("gsr-hint");
+            card.container(|row| {
+                row.button("Yes, discard them")
+                    .class("gsr-btn gsr-danger")
+                    .on_click(Msg::ConfirmDiscard);
+                row.button("Cancel")
+                    .class("gsr-btn")
+                    .on_click(Msg::CancelConfirm);
+            })
+            .class("gsr-confirm-row");
+        }
+    })
+    .class("gsr-confirm");
+}
+
+/// (pro) The Changes tab: what would a save pick up, plus the merge-conflict
+/// wizard. Reads natively so external edits are always seen fresh.
+#[cfg(feature = "pro")]
+fn render_changes(c: &mut ContainerBuilder<Msg>, pro: &ProCtx, data: &Rc<Loaded>) {
+    if data.path.is_none() {
+        c.container(|card| {
+            card.heading(3, "Desktop only");
+            card.text("Saving changes works in the TPT Git Simple desktop app, where the repository lives on your disk.")
+                .class("gsr-hint");
+        })
+        .class("gsr-card");
+        return;
+    }
+
+    // Fetch status natively on first render of the tab (the effect re-runs
+    // once it lands).
+    if pro.status_rows.get().is_none() {
+        let pro = pro.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match with_path(&pro, "git.status", serde_json::json!({})).await {
+                Ok(value) => {
+                    let rows: Vec<crate::pro::StatusRow> =
+                        serde_json::from_value(value).unwrap_or_default();
+                    // Default: everything is ticked (the "save my changes"
+                    // mental model).
+                    *pro.staged.borrow_mut() = rows.iter().map(|r| r.path.clone()).collect();
+                    pro.status_rows.set(Some(rows));
+                }
+                Err(e) => {
+                    pro.status_rows.set(Some(Vec::new()));
+                    pro.notice.set(Some(e));
+                }
+            }
+        });
+    }
+
+    // Conflict wizard first — it supersedes the normal save flow.
+    if let Some((reports, _parent)) = pro.conflicts.get() {
+        if !reports.is_empty() {
+            c.container(|card| {
+                card.heading(3, "Finish getting the latest version");
+                card.text("A few files have both your changes and the incoming changes in the same spot. For each one, open it in your editor and keep what should stay — markers like <<<<<<< show the two choices. Then press the button below and save.")
+                    .class("gsr-hint");
+                for report in &reports {
+                    card.container(|item| {
+                        item.text(report.path.clone()).class("gsr-commit-msg");
+                        item.container(|p| {
+                            p.text(report.headline.clone());
+                        })
+                        .class("gsr-hint");
+                        for section in &report.sections {
+                            item.container(|sides| {
+                                sides.container(|ours| {
+                                    ours.text("Your version").class("gsr-side-label");
+                                    ours.text(section.ours.join("\n"));
+                                })
+                                .class("gsr-side ours");
+                                sides.container(|theirs| {
+                                    theirs.text("The latest version").class("gsr-side-label");
+                                    theirs.text(section.theirs.join("\n"));
+                                })
+                                .class("gsr-side theirs");
+                            })
+                            .class("gsr-conflict-sides");
+                        }
+                    })
+                    .class("gsr-conflict");
+                }
+                card.container(|row| {
+                    row.button("I've fixed the files — check again")
+                        .class("gsr-btn")
+                        .on_click(Msg::ConflictsResolved);
+                })
+                .class("gsr-actions");
+            })
+            .class("gsr-card");
+        }
+    }
+
+    let Some(rows) = pro.status_rows.get() else {
+        c.container(|card| {
+            card.text("Checking what changed…").class("gsr-hint");
+        })
+        .class("gsr-card gsr-empty");
+        return;
+    };
+
+    // The save card.
+    let (saved_name, saved_email) = crate::pro::load_identity();
+    let staged_now = pro.staged.borrow().len();
+    c.container(|card| {
+        card.heading(3, "Save your changes");
+        if rows.is_empty() {
+            card.text("Nothing to save — every file matches the last saved version.")
+                .class("gsr-hint");
+        } else {
+            card.text("Tick the files to include. Anything unticked keeps waiting for next time.")
+                .class("gsr-hint");
+            card.container(|list| {
+                list.container(|tools| {
+                    tools.button("Tick all").class("gsr-close").on_click(Msg::StageAll(true));
+                    tools.button("Untick all").class("gsr-close").on_click(Msg::StageAll(false));
+                })
+                .class("gsr-actions");
+                for row in &rows {
+                    let checked = pro.staged.borrow().contains(&row.path);
+                    let path = row.path.clone();
+                    list.container(|line| {
+                        line.checkbox(&path, checked)
+                            .class("gsr-check")
+                            .on_toggle(move |_| Msg::ToggleStage(path.clone(), !checked));
+                        line.text(row.label()).class("gsr-status-kind");
+                    })
+                    .class("gsr-status-row");
+                }
+            })
+            .class("gsr-status");
+            card.container(|field| {
+                field.container(|label| {
+                    label.text("What changed?");
+                })
+                .class("gsr-field-label");
+                field.input(pro.message.borrow().clone())
+                    .class("gsr-input")
+                    .on_input(|_| Msg::TypeMessage);
+            })
+            .class("gsr-field");
+            card.container(|actions| {
+                actions.button(format!("Save {} file{}", staged_now, if staged_now == 1 { "" } else { "s" }))
+                    .class("gsr-btn gsr-primary")
+                    .on_click(Msg::SaveNow);
+                actions.button("Discard ticked changes…")
+                    .class("gsr-btn")
+                    .on_click(Msg::AskDiscard);
+            })
+            .class("gsr-actions");
+        }
+    })
+    .class("gsr-card");
+
+    // Identity nudge when missing.
+    if saved_name.is_empty() || saved_email.is_empty() {
+        c.container(|card| {
+            card.text("Add your name and email (sidebar) so saves are recorded with your name.")
+                .class("gsr-hint");
+        })
+        .class("gsr-card");
+    }
 }
 
 /// The free-edition upsell (sidebar).

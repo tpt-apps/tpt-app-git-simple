@@ -11,6 +11,12 @@ path = "src/main.rs"
 
 [dependencies]
 tpt-appfront-webview = { path = "D:/Programming/1PRODUCTION/Open Source/tpt-appfront/crates/tpt-appfront-webview" }
+# The Pro engine (writes, undo, merge, conflict guidance) runs natively here.
+tpt-git-engine = { path = "../engine", features = ["pro"] }
+# IPC param/result payloads (mirrors the webview crate's JSON bridge).
+serde_json = "1"
+# File contents over the IPC bridge.
+base64 = "0.22"
 # Embeds `../dist` into the exe at compile time so the shipped binary is a
 # genuinely standalone, single-file download — no separate dist/ folder the
 # customer could unzip apart from it or move the exe away from.

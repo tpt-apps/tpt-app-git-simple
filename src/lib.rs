@@ -15,6 +15,10 @@
 mod app;
 #[cfg(target_arch = "wasm32")]
 mod repo_source;
+// Pro desktop bridge: the `window.__appfront` IPC client (feature `pro`).
+#[cfg(target_arch = "wasm32")]
+#[cfg(feature = "pro")]
+mod pro;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

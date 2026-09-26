@@ -88,6 +88,18 @@ pub fn commit_staged<F: GitFs>(
     message: &str,
     files: &[StagedFile],
 ) -> Result<Oid> {
+    commit_staged_with_parents(repo, identity, message, files, &[])
+}
+
+/// As [`commit_staged`], with additional parents beyond HEAD — used to
+/// record a merge (the extra parent is the fetched branch tip).
+pub fn commit_staged_with_parents<F: GitFs>(
+    repo: &mut Repo<F>,
+    identity: &Identity,
+    message: &str,
+    files: &[StagedFile],
+    extra_parents: &[Oid],
+) -> Result<Oid> {
     for file in files {
         validate_path(&file.path)?;
     }
@@ -134,6 +146,11 @@ pub fn commit_staged<F: GitFs>(
     let mut payload = Vec::new();
     payload.extend_from_slice(format!("tree {}\n", new_tree.to_hex()).as_bytes());
     payload.extend_from_slice(format!("parent {}\n", head_commit.to_hex()).as_bytes());
+    for parent in extra_parents {
+        if *parent != head_commit {
+            payload.extend_from_slice(format!("parent {}\n", parent.to_hex()).as_bytes());
+        }
+    }
     payload.extend_from_slice(format!("author {}\n", render_signature(&author)).as_bytes());
     payload.extend_from_slice(format!("committer {}\n", render_signature(&author)).as_bytes());
     payload.push(b'\n');
@@ -141,7 +158,12 @@ pub fn commit_staged<F: GitFs>(
     let commit_oid = write_object(repo, ObjectType::Commit, &payload)?;
 
     // Point the branch at the new commit + reflog.
-    update_branch_ref(repo, &branch, head_commit, commit_oid, &format!("save: {}", summary(message)))?;
+    let action = if extra_parents.is_empty() {
+        format!("save: {}", summary(message))
+    } else {
+        format!("merge: {}", summary(message))
+    };
+    update_branch_ref(repo, &branch, head_commit, commit_oid, &action)?;
     Ok(commit_oid)
 }
 

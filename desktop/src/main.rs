@@ -4,17 +4,26 @@
 //! serves the `trunk build --release` output of the appfront DOM bundle from
 //! `dist/`. The same DOM bundle ships to the hub for the free WASM edition;
 //! the Pro difference at runtime is that the bundle is built with
-//! `--features pro`, which compiles in plain-language save (commit), get
-//! latest (pull), push, guided conflict resolution, and safe undo.
+//! `--features pro` and the hosted page talks to this process over IPC:
 //!
-//! Phase 0 shell: identical to the fea-lite-pro pattern minus the IPC
-//! actions it doesn't need yet. The Pro git operations (git CLI-backed
-//! push/pull) extend the ACL in Phase 3.
+//! - `dialog.open` (framework built-in): the native folder picker — the one
+//!   place a real repo path enters the app;
+//! - `git.*` ([`git_host`]): snapshot/status/save/undo/discard/restore/pull/
+//!   push, all executed natively with the engine + the git CLI, results
+//!   delivered back to the page via the value-reply IPC bridge.
+//!
+//! `dist/` is embedded into the exe at compile time (see [`DIST`]), so the
+//! shipped file is a single exe with no companion folder. Resolve order for
+//! the bundle directory: `TPT_GIT_SIMPLE_DIST` env var, `./dist`, `dist`
+//! next to the exe, then the embedded copy extracted to the OS temp dir.
 
 use std::path::PathBuf;
 
 use include_dir::{include_dir, Dir};
+use serde_json::json;
 use tpt_appfront_webview::{Acl, AppBuilder, Capability, ParamKind, ParamSpec, WindowConfig};
+
+mod git_host;
 
 const APP_ID: &str = "nz.co.tptsolutions.git-simple-pro";
 
@@ -34,6 +43,78 @@ fn main() {
         std::process::exit(1);
     }
 
+    let any_string = |name: &str, required: bool| ParamSpec {
+        name: name.to_string(),
+        required,
+        kind: ParamKind::Any,
+        default: None,
+    };
+
+    // Every page-reachable action, pinned to its parameter contract. File
+    // contents are base64 strings; object payloads are Any.
+    let git_cap = |action: &str, params: Vec<ParamSpec>| Capability {
+        action: action.to_string(),
+        params,
+    };
+    let acl = Acl {
+        capabilities: vec![
+            Capability {
+                action: "dialog.open".to_string(),
+                params: vec![any_string("title", false), any_string("dir", false)],
+            },
+            Capability {
+                action: "open_external".to_string(),
+                params: vec![ParamSpec {
+                    name: "url".to_string(),
+                    required: true,
+                    kind: ParamKind::String,
+                    default: None,
+                }],
+            },
+            git_cap("git.snapshot", vec![any_string("path", true)]),
+            git_cap("git.status", vec![any_string("path", true)]),
+            git_cap(
+                "git.save",
+                vec![
+                    any_string("path", true),
+                    any_string("message", true),
+                    any_string("name", true),
+                    any_string("email", true),
+                    any_string("files", true),
+                    any_string("mergeParent", false),
+                ],
+            ),
+            git_cap(
+                "git.undo",
+                vec![any_string("path", true), any_string("name", true), any_string("email", true)],
+            ),
+            git_cap(
+                "git.discard",
+                vec![
+                    any_string("path", true),
+                    any_string("name", true),
+                    any_string("email", true),
+                    any_string("files", true),
+                ],
+            ),
+            git_cap("git.backups", vec![any_string("path", true)]),
+            git_cap(
+                "git.restore",
+                vec![
+                    any_string("path", true),
+                    any_string("name", true),
+                    any_string("email", true),
+                    any_string("backupRef", true),
+                ],
+            ),
+            git_cap(
+                "git.pull",
+                vec![any_string("path", true), any_string("name", true), any_string("email", true)],
+            ),
+            git_cap("git.push", vec![any_string("path", true)]),
+        ],
+    };
+
     let result = AppBuilder::new(APP_ID)
         .with_window(WindowConfig {
             id: "main".to_string(),
@@ -43,18 +124,8 @@ fn main() {
             dist_dir,
         })
         .with_single_instance(true)
-        .with_acl(Acl {
-            capabilities: vec![Capability {
-                action: "open_external".to_string(),
-                params: vec![ParamSpec {
-                    name: "url".to_string(),
-                    required: true,
-                    kind: ParamKind::String,
-                    default: None,
-                }],
-            }],
-        })
-        .run(|action, params| {
+        .with_acl(acl)
+        .run_with_value_handler(|action, params| {
             if action == "open_external" {
                 let url = params.get("url").and_then(|v| v.as_str()).unwrap_or("");
                 // Belt-and-braces on top of the ACL's string-type check: only
@@ -63,8 +134,10 @@ fn main() {
                 if url.starts_with("https://tptsolutions.co.nz") {
                     let _ = open::that(url);
                 }
+                return Ok(json!({ "ok": true }));
             }
-            Ok(())
+            // Errors carry plain-English text the UI shows as-is.
+            git_host::handle(action, &params)
         });
 
     if let Err(error) = result {
@@ -73,6 +146,8 @@ fn main() {
     }
 }
 
+/// Helper so the unmatched-action error keeps the full name (the `rest`
+/// strip above only exists to make the intent explicit).
 fn resolve_dist_dir() -> PathBuf {
     if let Ok(from_env) = std::env::var("TPT_GIT_SIMPLE_DIST") {
         return PathBuf::from(from_env);

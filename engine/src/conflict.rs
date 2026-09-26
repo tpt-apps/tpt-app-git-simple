@@ -136,7 +136,12 @@ pub fn parse_markers(path: &str, bytes: &[u8]) -> Option<ConflictFile> {
     if hunks.is_empty() {
         None
     } else {
-        Some(ConflictFile { path: path.to_string(), delete_modify: false, hunks })
+        Some(ConflictFile {
+            path: path.to_string(),
+            delete_modify: false,
+            hunks,
+            marked: Vec::new(),
+        })
     }
 }
 
@@ -189,6 +194,7 @@ mod tests {
                 theirs: vec!["price: 25".into()],
                 base: Some(vec!["price: 18".into()]),
             }],
+            marked: Vec::new(),
         };
         let g = guidance_from(&conflict);
         assert_eq!(g.sections.len(), 1);
@@ -203,6 +209,7 @@ mod tests {
             path: "old.md".into(),
             delete_modify: true,
             hunks: vec![ConflictHunk::default()],
+            marked: Vec::new(),
         };
         let g = guidance_from(&conflict);
         assert!(g.headline.contains("deleted"));
