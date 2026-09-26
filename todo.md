@@ -29,18 +29,28 @@
       tests + the Pro desktop exe, wasm32 for the browser (fed by a JS-side directory
       snapshot). GitCastle remains the UX reference for plain-language git.
 
-## Phase 1 — Core engine (wrap tpt-gitcastle)
-- [ ] Survey `tpt-gitcastle` for existing git-object/porcelain-level
-      operations (status, log, diff, commit, push, pull, merge-conflict
-      detection) to reuse
-- [ ] Adapter crate `engine/`: repo path in → status/log/diff out; commit
-      message + staged files in → commit out; conflict state in →
-      plain-English guidance out — as plain structs, no UI deps,
-      host-unit-testable
-- [ ] Safe-undo design: confirm every destructive-feeling action (discard,
-      reset) has a real recovery path (reflog-backed) before exposing it
-- [ ] Validation against a real test repo: commit/push/pull/merge-conflict
-      round trip
+## Phase 1 — Core engine (replaces "wrap tpt-gitcastle": see Phase 0 note —
+   GitCastle is TS/Electron, so the engine is a pure-Rust git implementation)
+- [x] Survey `tpt-gitcastle` for existing git operations to reuse —
+      conclusion: nothing reusable in Rust/WASM (Electron + Node git); kept
+      as UX reference only
+- [x] Adapter crate `engine/`: repo in → status/log/diff out; commit message
+      + staged files in → commit out; conflict state in → plain-English
+      guidance out — plain structs, no UI deps, host-unit-testable
+      (`tpt-git-engine`: refs/HEAD, loose + packed objects (idx v2, ofs/ref
+      deltas), log, tree walks, Myers line diff, worktree status; `pro`:
+      object writing, staged commits, reflog, backup refs, 3-way merge,
+      conflict guidance)
+- [x] Safe-undo design: every destructive action has a real recovery path —
+      reflog appended on every ref update; discards write a backup commit on
+      `refs/tpt-git-simple/backups/<ts>-<n>` first (restore reads the tree
+      back); undo-last-save is a soft ref move, redo re-reads the reflog
+- [x] Validation against a real test repo: `engine/tests/real_repo.rs`
+      builds fixtures with the git CLI — reads match `rev-parse`/`log`/
+      `ls-tree`/`cat-file`, packed objects verified per-oid, engine-written
+      commits pass `git fsck --strict` and `git log` agrees, merge base
+      matches `git merge-base`, conflicts match git's, undo/discard/restore
+      round trips (cargo test -p tpt-git-engine --features pro)
 
 ## Phase 2 — Free tier
 - [ ] View-only repo browser: file tree, commit history, diff viewer — no
